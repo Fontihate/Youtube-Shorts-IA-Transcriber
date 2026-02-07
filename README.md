@@ -77,8 +77,8 @@ Este proyecto genera un archivo local llamado `API_KEYS.json`.
 ---
 
 ## 👨‍💻 Autor
-Desarrollado por **Andrés Fontaneda**.
+Hecho con ❤️ por [Fontihate](https://github.com/Fontihate)
 
 ---
 ¡Si te gusta el proyecto, dale una ⭐ en GitHub!
-```
+---
