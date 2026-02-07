@@ -1,0 +1,9 @@
+google-api-python-client
+pandas
+openpyxl
+requests
+yt-dlp
+openai-whisper
+torch
+torchvision
+torchaudio
