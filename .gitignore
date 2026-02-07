@@ -1,0 +1,17 @@
+# Seguridad
+API_KEYS.json
+
+# Archivos temporales de Python
+__pycache__/
+*.py[cod]
+*$py.class
+temp_audio.m4a
+temp.m4a
+
+# Datos generados (opcional: si quieres subir tus resultados, borra estas dos líneas)
+resultados_excel/
+transcripciones_completas/
+
+# Entornos virtuales
+venv/
+.env
