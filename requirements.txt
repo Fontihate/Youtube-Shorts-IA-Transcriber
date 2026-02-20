@@ -1,9 +1,8 @@
-google-api-python-client
 pandas
-openpyxl
 requests
+google-api-python-client
 yt-dlp
 openai-whisper
 torch
-torchvision
-torchaudio
+streamlit
+openpyxl
