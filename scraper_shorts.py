@@ -3,6 +3,7 @@ import json
 import requests
 import pandas as pd
 import googleapiclient.discovery
+from concurrent.futures import ThreadPoolExecutor # Nueva importación para velocidad
 
 # CONFIGURACIÓN DINÁMICA
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -20,11 +21,36 @@ def gestionar_api_key():
     with open(RUTA_JSON, 'r') as f: return json.load(f).get("youtube_api")
 
 def es_short_real(video_id):
+    """Comprueba si la URL /shorts/ existe. Es la forma exacta de saberlo."""
     url = f"https://www.youtube.com/shorts/{video_id}"
     try:
         res = requests.head(url, allow_redirects=True, timeout=5)
         return "/shorts/" in res.url
     except: return False
+
+def verificar_lista_shorts(lista_videos):
+    """Usa hilos múltiples para comprobar si son shorts en paralelo (MUY RÁPIDO)."""
+    data = []
+    print(f"[INFO] Verificando {len(lista_videos)} videos en paralelo...")
+    
+    # Función auxiliar para procesar cada video
+    def procesar_video(v):
+        if es_short_real(v['id']):
+            return {
+                "Titulo": v['snippet']['title'],
+                "Vistas": int(v['statistics'].get('viewCount', 0)),
+                "Link": f"https://www.youtube.com/shorts/{v['id']}",
+                "Descripción": v['snippet'].get('description', 'Sin descripción'),
+                "Validador": "Pendiente"
+            }
+        return None
+
+    # Ejecutamos en paralelo (max_workers=20 para ir rápido)
+    with ThreadPoolExecutor(max_workers=20) as executor:
+        resultados = list(executor.map(procesar_video, lista_videos))
+    
+    # Filtramos los None (los que no eran shorts)
+    return [r for r in resultados if r is not None]
 
 def obtener_info_canal(youtube, url):
     print(f"[PROCESO] Identificando canal...")
@@ -43,8 +69,7 @@ def main():
         ch_id, ch_name = obtener_info_canal(youtube, canal_url)
         print(f"[INFO] Canal detectado: {ch_name}")
         
-        # --- NUEVO VALIDADOR DE CANTIDAD ---
-        limite_input = input("¿Cuántos videos recientes quieres analizar? (Escribe un número o 'todos'): ").strip().lower()
+        limite_input = input("¿Cuántos videos recientes quieres analizar? (Número o 'todos'): ").strip().lower()
         limite = 999999 if limite_input == 'todos' else int(limite_input)
 
         ch_res = youtube.channels().list(part="contentDetails", id=ch_id).execute()
@@ -55,7 +80,6 @@ def main():
         print(f"[PROCESO] Obteniendo lista de videos (máximo {limite})...")
         
         while len(v_ids) < limite:
-            # Pedimos máximo 50 por página (límite de la API)
             max_a_pedir = min(50, limite - len(v_ids))
             res = youtube.playlistItems().list(
                 part="contentDetails", 
@@ -68,24 +92,25 @@ def main():
             next_p = res.get('nextPageToken')
             if not next_p: break
 
-        print(f"[INFO] Analizando {len(v_ids)} videos para filtrar Shorts y extraer descripciones...")
-        data = []
+        print(f"[INFO] Analizando {len(v_ids)} videos...")
+        
+        videos_para_chequear = []
+        
+        # Obtenemos detalles de los videos
         for i in range(0, len(v_ids), 50):
             batch = v_ids[i:i+50]
             v_res = youtube.videos().list(part="snippet,statistics", id=",".join(batch)).execute()
             for v in v_res['items']:
-                print(f"  > Validando: {v['snippet']['title'][:40]}...", end="\r")
-                if es_short_real(v['id']):
-                    data.append({
-                        "Titulo": v['snippet']['title'],
-                        "Vistas": int(v['statistics'].get('viewCount', 0)),
-                        "Link": f"https://www.youtube.com/shorts/{v['id']}",
-                        "Descripción": v['snippet'].get('description', 'Sin descripción'),
-                        "Validador": "Pendiente"
-                    })
+                videos_para_chequear.append({
+                    'id': v['id'],
+                    'snippet': v['snippet'],
+                    'statistics': v['statistics']
+                })
+
+        # FILTRADO REAL USANDO MULTITHREADING (SOLUCIÓN AL PROBLEMA DE TIEMPO)
+        data = verificar_lista_shorts(videos_para_chequear)
 
         if data:
-            # Ordenar por visitas de más a menos
             df = pd.DataFrame(data).sort_values(by='Vistas', ascending=False)
             nombre_limpio = "".join(c for c in ch_name if c.isalnum() or c in ' -_').strip() + ".xlsx"
             ruta_final = os.path.join(CARPETA_SALIDA, nombre_limpio)
