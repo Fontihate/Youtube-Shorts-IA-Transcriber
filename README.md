@@ -103,5 +103,7 @@ El proyecto incluye un archivo `.gitignore` configurado para ignorar automática
 ## 👨‍💻 Autor
 Hecho con ❤️ por [Fontihate](https://github.com/Fontihate)
 
+Nota sobre el desarrollo: Este proyecto ha sido diseñado, estructurado y supervisado por [Fontihate](https://github.com/Fontihate), utilizando herramientas de IA como asistente de código para la generación de sintaxis y optimización de scripts.
+
 ---
 ¡Si este proyecto te ha ahorrado tiempo, dale una ⭐ en GitHub!
