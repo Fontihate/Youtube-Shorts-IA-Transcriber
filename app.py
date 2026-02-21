@@ -8,18 +8,20 @@ import torch
 import googleapiclient.discovery
 import googleapiclient.errors
 from yt_dlp import YoutubeDL
+import ollama # Importamos Ollama para la restauración
 
 # --- CONFIGURACIÓN DE RUTAS Y CONSTANTES ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CARPETA_EXCEL = os.path.join(BASE_DIR, "resultados_excel")
 CARPETA_TXT = os.path.join(BASE_DIR, "transcripciones_completas")
+CARPETA_REFINADOS = os.path.join(BASE_DIR, "guiones_refinados")
 RUTA_JSON = os.path.join(BASE_DIR, "API_KEYS.json")
 
 # Crear carpetas si no existen
-for c in [CARPETA_EXCEL, CARPETA_TXT]:
+for c in [CARPETA_EXCEL, CARPETA_TXT, CARPETA_REFINADOS]:
     if not os.path.exists(c): os.makedirs(c)
 
-# --- FUNCIONES DE UTILIDAD (Importadas de tus scripts) ---
+# --- FUNCIONES DE UTILIDAD ---
 def limpiar_nombre(texto):
     return re.sub(r'[\\/*?:"<>|]', "", str(texto))[:80]
 
@@ -42,7 +44,7 @@ def guardar_api_key(key):
     with open(RUTA_JSON, 'w') as f:
         json.dump({"youtube_api": key}, f, indent=4)
 
-# --- LÓGICA DEL SCRAPER (Script 1) ---
+# --- LÓGICA DEL SCRAPER ---
 def ejecutar_scraper(url_canal, limite, youtube):
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -98,7 +100,6 @@ def ejecutar_scraper(url_canal, limite, youtube):
                         "Validador": "Pendiente"
                     })
             
-            # Actualizar barra de progreso
             progress = min((i + 50) / total, 1.0)
             progress_bar.progress(progress)
 
@@ -115,7 +116,7 @@ def ejecutar_scraper(url_canal, limite, youtube):
         st.error(f"Error en scraper: {e}")
         return None, None
 
-# --- LÓGICA IA (Script 2) ---
+# --- LÓGICA IA (TRANSCRIPCIÓN) ---
 @st.cache_resource
 def cargar_modelo_whisper():
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -142,19 +143,42 @@ def transcribir_video(titulo, link, descripcion, modelo):
     finally:
         if os.path.exists(nombre_audio): os.remove(nombre_audio)
 
+# --- LÓGICA IA (RESTAURACIÓN) ---
+def restaurar_guion_con_ia(guion_bruto):
+    """Versión mejorada con Few-Shot Prompting para web."""
+    ejemplos = """
+EJEMPLO 1:
+ENTRADA: "oye tio, no se si sabes pero la ia va a cambair el mundo"
+SALIDA: "Oye tío, no sé si sabes, pero la IA va a cambiar el mundo."
+"""
+    prompt_sistema = (
+        "Eres un corrector ortográfico automático.\n"
+        "REGLAS: NO añadas intros. NO expliques. SOLO corrige ortografía y puntuación.\n"
+        f"{ejemplos}"
+    )
+    prompt_usuario = f"ENTRADA:\n{guion_bruto}\n\nSALIDA:"
+
+    try:
+        response = ollama.chat(model='llama3', messages=[
+            {'role': 'system', 'content': prompt_sistema},
+            {'role': 'user', 'content': prompt_usuario},
+        ], options={"temperature": 0.0, "stop": ["ENTRADA:", "EJEMPLO"]})
+        return response['message']['content'].strip()
+    except Exception as e:
+        return f"Error de IA: {e}"
+
 # --- INTERFAZ DE USUARIO (STREAMLIT) ---
 st.set_page_config(page_title="Shorts IA Tool", layout="wide")
 st.title("🤖 YouTube Shorts IA Transcriber")
 
-# Barra lateral para configuración
+# Barra lateral
 with st.sidebar:
     st.header("Configuración")
     api_key_input = st.text_input("YouTube API Key", type="password", value=obtener_api_key() or "")
     if st.button("Guardar API Key"):
         guardar_api_key(api_key_input)
         st.success("Clave guardada localmente.")
-
-    st.info("Asegúrate de guardar la API Key antes de empezar.")
+    st.info("Asegúrate de tener Ollama corriendo para la restauración de guiones.")
 
 # Validar API Key
 API_KEY = obtener_api_key()
@@ -169,7 +193,7 @@ except Exception as e:
     st.stop()
 
 # Pestañas principales
-tab1, tab2 = st.tabs(["🕷️ Scraper de Canal", "📝 Transcriptor IA"])
+tab1, tab2, tab3 = st.tabs(["🕷️ Scraper de Canal", "📝 Transcriptor IA", "✨ Restaurar Guiones"])
 
 # --- TAB 1: SCRAPER ---
 with tab1:
@@ -184,7 +208,7 @@ with tab1:
 
     if st.button("Iniciar Scraping", key="btn_scraper"):
         if url_canal:
-            with st.spinner("Procesando... esto puede tardar unos segundos."):
+            with st.spinner("Procesando..."):
                 df_resultado, ruta_archivo = ejecutar_scraper(url_canal, limite, youtube)
             
             if df_resultado is not None:
@@ -204,11 +228,9 @@ with tab1:
 # --- TAB 2: TRANSCRIPTOR ---
 with tab2:
     st.subheader("Procesar y Transcribir")
-    
-    # Cargar modelo una sola vez
     modelo = cargar_modelo_whisper()
     
-    opcion = st.radio("Modo de operación:", ["Procesar Excel generado", "Link Directo (Modo Francotirador)"], horizontal=True)
+    opcion = st.radio("Modo de operación:", ["Procesar Excel generado", "Link Directo"], horizontal=True)
 
     if opcion == "Procesar Excel generado":
         archivos = [f for f in os.listdir(CARPETA_EXCEL) if f.endswith('.xlsx')]
@@ -220,85 +242,85 @@ with tab2:
             if archivo_sel:
                 ruta_excel = os.path.join(CARPETA_EXCEL, archivo_sel)
                 df = pd.read_excel(ruta_excel)
-                
-                # Normalizar columnas por si acaso
                 df = df.rename(columns={'nº de vistas': 'Vistas', 'Titulo del short': 'Titulo', 'link del video': 'Link'})
-                
-                # Filtro pendientes
                 pendientes = df[df['Validador'] == 'Pendiente'].sort_values(by='Vistas', ascending=False)
                 
                 st.write(f"Pendientes: {len(pendientes)} videos.")
                 
-                # Mostrar top 5 para seleccionar
                 if not pendientes.empty:
                     st.dataframe(pendientes.head(5)[['Titulo', 'Vistas', 'Link']])
                     
                     procesar = st.button("Transcribir Top 5 Pendientes")
                     if procesar:
-                        items_a_procesar = pendientes.head(5)
-                        progress_bar = st.progress(0)
+                        items = pendientes.head(5)
+                        progress = st.progress(0)
                         
-                        for i, (idx, row) in enumerate(items_a_procesar.iterrows()):
+                        for i, (idx, row) in enumerate(items.iterrows()):
                             st.markdown(f"**Procesando: {row['Titulo'][:40]}...**")
-                            
-                            guion, ruta_txt = transcribir_video(
-                                row['Titulo'], 
-                                row['Link'], 
-                                row.get('Descripción', ''), 
-                                modelo
-                            )
+                            guion, ruta_txt = transcribir_video(row['Titulo'], row['Link'], row.get('Descripción', ''), modelo)
                             
                             if guion:
                                 df.at[idx, 'Validador'] = 'Completado'
-                                st.success(f"Transcripción completada: {os.path.basename(ruta_txt)}")
-                                with open(ruta_txt, "r", encoding="utf-8") as f:
-                                    st.download_button(
-                                        label=f"Descargar TXT {i+1}",
-                                        data=f.read(),
-                                        file_name=os.path.basename(ruta_txt),
-                                        key=f"dl_{i}"
-                                    )
+                                st.success(f"OK: {os.path.basename(ruta_txt)}")
                             else:
-                                st.error(f"Error en video {row['Titulo']}: {ruta_txt}")
+                                st.error(f"Error en video {row['Titulo']}")
                             
-                            progress_bar.progress((i + 1) / len(items_a_procesar))
+                            progress.progress((i + 1) / len(items))
                         
-                        # Guardar cambios en Excel
                         df.to_excel(ruta_excel, index=False)
-                        st.rerun() # Recargar para actualizar estados
-                else:
-                    st.success("¡No hay videos pendientes en este Excel!")
+                        st.rerun()
 
-    elif opcion == "Link Directo (Modo Francotirador)":
+    elif opcion == "Link Directo":
         url_directa = st.text_input("Pega el link del Short:")
-        
         if st.button("Transcribir Link"):
             if url_directa:
-                with st.spinner("Descargando y transcribiendo..."):
-                    # Obtener metadatos
+                with st.spinner("Procesando..."):
                     try:
-                        video_id = url_directa.split("/shorts/")[1].split("?")[0] if "/shorts/" in url_directa else url_directa.split("v=")[-1]
+                        video_id = url_directa.split("/shorts/")[1].split("?")[0]
                         res = youtube.videos().list(part="snippet", id=video_id).execute()
-                        snippet = res['items'][0]['snippet']
-                        titulo = snippet.get('title')
-                        descripcion = snippet.get('description', 'Sin descripción')
+                        titulo = res['items'][0]['snippet']['title']
+                        descripcion = res['items'][0]['snippet'].get('description', '')
                         
                         guion, ruta = transcribir_video(titulo, url_directa, descripcion, modelo)
-                        
                         if guion:
-                            st.subheader("📄 Resultado")
-                            st.text_area("Transcripción", guion, height=300)
-                            with open(ruta, "r", encoding="utf-8") as f:
-                                st.download_button(
-                                    label="📥 Descargar Transcripción TXT",
-                                    data=f.read(),
-                                    file_name=os.path.basename(ruta),
-                                    mime="text/plain"
-                                )
-                        else:
-                            st.error(f"Error: {ruta}")
-                            
+                            st.text_area("Resultado", guion, height=300)
                     except Exception as e:
-                        st.error(f"No se pudo obtener info del video: {e}")
-            else:
-                st.warning("Introduce un link.")
+                        st.error(f"Error: {e}")
+
+# --- TAB 3: RESTAURAR GUIONES (NUEVO) ---
+with tab3:
+    st.subheader("Restaurar y Limpiar Guiones con IA")
+    st.markdown("Utiliza **Ollama (Llama3)** para corregir la puntuación y ortografía de las transcripciones brutas.")
+    
+    archivos_txt = [f for f in os.listdir(CARPETA_TXT) if f.endswith('.txt')]
+    
+    if not archivos_txt:
+        st.info("No hay transcripciones en la carpeta 'transcripciones_completas' para restaurar.")
+    else:
+        archivo_sel = st.selectbox("Selecciona la transcripción a restaurar:", archivos_txt)
+        
+        if st.button("Restaurar Guion"):
+            ruta_in = os.path.join(CARPETA_TXT, archivo_sel)
+            
+            with open(ruta_in, "r", encoding="utf-8") as f:
+                contenido_bruto = f.read()
+                # Extraemos solo la parte del guion
+                texto_bruto = contenido_bruto.split("GUIÓN:")[1].split("DESCRIPCIÓN:")[0] if "GUIÓN:" in contenido_bruto else contenido_bruto
+
+            with st.spinner("La IA está corrigiendo el texto... (Esto puede tardar unos segundos)"):
+                texto_corregido = restaurar_guion_con_ia(texto_bruto)
+            
+            st.markdown("#### Resultado Corregido:")
+            st.success("¡Corrección completada!")
+            st.text_area("Texto Final", texto_corregido, height=300)
+            
+            # Botón para guardar
+            nombre_salida = f"GUION_LIMPIO_{archivo_sel}"
+            ruta_out = os.path.join(CARPETA_REFINADOS, nombre_salida)
+            
+            st.download_button(
+                label="💾 Descargar Guion Limpio",
+                data=texto_corregido,
+                file_name=nombre_salida,
+                mime="text/plain"
+            )
